@@ -1,0 +1,1074 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GGB to ASY Web Converter</title>
+    <!-- Nhúng thư viện JSZip từ CDN để chạy trực tiếp trên trình duyệt -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #f5f7fb;
+            color: #333;
+            margin: 0;
+            padding: 40px 20px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 650px;
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+        }
+
+        h2 {
+            margin-top: 0;
+            color: #007acc;
+            font-size: 24px;
+            text-align: center;
+        }
+
+        p.subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+        }
+
+        .upload-box {
+            border: 2px dashed #007acc;
+            border-radius: 8px;
+            padding: 40px 20px;
+            text-align: center;
+            background-color: #f9fbfd;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .upload-box:hover {
+            background-color: #f0f7ff;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .btn {
+            display: inline-block;
+            background-color: #007acc;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-weight: bold;
+            margin-top: 15px;
+            text-decoration: none;
+        }
+
+        .progress-container {
+            margin-top: 25px;
+            display: none;
+        }
+
+        .progress-bar {
+            width: 100%;
+            background-color: #e0e0e0;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 10px;
+            width: 0%;
+            background-color: #007acc;
+            transition: width 0.2s;
+        }
+
+        .log-area {
+            margin-top: 25px;
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: "Courier New", Courier, monospace;
+            font-size: 13px;
+            height: 180px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+        <h2>GGB to ASY Web Converter</h2>
+        <p class="subtitle">Ứng dụng chuyển đổi GeoGebra sang Asymptote chạy offline trực tiếp trong trình duyệt</p>
+
+        <!-- Khung tải tệp lên -->
+        <div class="upload-box" onclick="document.getElementById('file-input').click()">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#007acc" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="17 8 12 3 7 8"></polyline>
+                <line x1="12" y1="3" x2="12" y2="15"></line>
+            </svg>
+            <p>Kéo thả các file <b>.ggb</b> vào đây hoặc click để chọn tệp</p>
+            <span class="btn">Chọn File</span>
+            <input type="file" id="file-input" accept=".ggb" multiple>
+        </div>
+
+        <!-- Tiến trình -->
+        <div class="progress-container" id="progress-container">
+            <div style="margin-bottom: 5px; font-size: 14px; display: flex; justify-content: space-between;">
+                <span id="progress-text">Đang xử lý...</span>
+                <span id="progress-percent">0%</span>
+            </div>
+            <div style="background: #e0e0e0; border-radius: 4px; height: 10px; overflow: hidden;">
+                <div id="progress-bar" style="width: 0%; height: 100%; background-color: #008080;"></div>
+            </div>
+        </div>
+
+        <!-- Nhật ký chạy -->
+        <div id="log" class="log"
+            style="margin-top: 15px; max-height: 150px; overflow-y: auto; font-family: monospace; font-size: 11px; background: #f4f4f4; padding: 10px; border-radius: 4px; white-space: pre-wrap;">
+            // Trạng thái hệ thống: Sẵn sàng nhận tệp tin.
+        </div>
+    </div>
+
+    <script>
+        // =============================================================================
+        // ASY_HEADER - Template for the .asy file header
+        // =============================================================================
+        const ASY_HEADER = [
+            'import geometry;',
+            'unitsize(1cm);',
+            'defaultpen(fontsize(10pt));',
+            '',
+            '// --- 0. STYLE & COLOR DEFINITIONS ---',
+            '// DYNAMIC_STYLES_HERE',
+            '',
+            '// --- GEO2D GGB-TO-ASY HELPER FUNCTIONS ---',
+            '// DYNAMIC_HELPERS_HERE',
+            '// -----------------------------------------',
+            ''
+        ].join('\n');
+
+        // =============================================================================
+        // THƯ VIỆN ĐỊNH NGHĨA HELPER ASYMPTOTE
+        // =============================================================================
+        const ASY_HELPERS = {
+            ray: "line ray(point A, point B) { return line(A, false, B, true); }",
+            circle_point: "circle circle_point(point C, point P) { return circle(C, abs(C - P)); }",
+            triangle_center: `point triangle_center(point A, point B, point C, int center_type) {
+    if (center_type == 1001) return excenter(A, B, C); // EXCENTER_A
+    if (center_type == 1002) return excenter(B, C, A); // EXCENTER_B
+    if (center_type == 1003) return excenter(C, A, B); // EXCENTER_C
+    real weight(real a, real b, real c) {
+        if (center_type == 1) return a; // INCENTER
+        if (center_type == 2) return 1.0; // CENTROID
+        if (center_type == 3) return a^2 * (b^2 + c^2 - a^2); // CIRCUMCENTER
+        if (center_type == 4) return (a^2 + b^2 - c^2) * (a^2 + c^2 - b^2); // ORTHOCENTER
+        if (center_type == 5) return a^2 * (b^2 + c^2) - (b^2 - c^2)^2; // NINE_POINT
+        if (center_type == 6) return a^2; // SYMMEDIAN
+        if (center_type == 7) return (b + c - a != 0) ? 1.0 / (b + c - a) : 0.0; // GERGONNE
+        if (center_type == 8) return b + c - a; // NAGEL
+        if (center_type == 9) return a * (b + c - a); // MITTENPUNKT
+        if (center_type == 10) return b + c; // SPIEKER
+        if (center_type == 11) return (b + c - a) * (b - c)^2; // FEUERBACH
+        if (center_type == 69) return b^2 + c^2 - a^2; // X69
+        if (center_type == 76) return (a != 0) ? 1.0 / a^2 : 0.0; // X76
+        return 0.0;
+    }
+    real a = length(B - C); real b = length(C - A); real c = length(A - B);
+    real wA = weight(a, b, c); real wB = weight(b, c, a); real wC = weight(c, a, b);
+    real total = wA + wB + wC;
+    if (abs(total) < 1e-12) return (nan, nan);
+    return (wA*A + wB*B + wC*C) / total;
+}`,
+            mixtilinear_incircle: `circle mixtilinear_incircle(point A, point B, point C) {
+    real a = length(B - C); real b = length(C - A); real c = length(A - B);
+    real s = (a + b + c) / 2.0;
+    real area = sqrt(s * (s - a) * (s - b) * (s - c));
+    real r = area / s;
+    real cos_A = (b^2 + c^2 - a^2) / (2.0 * b * c);
+    real radius = 2.0 * r / (1.0 + cos_A);
+    point I = triangle_center(A, B, C, 1);
+    point center = A + (radius / r) * (I - A);
+    return circle(center, radius);
+}`,
+            exmixtilinear_incircle: `circle exmixtilinear_incircle(point A, point B, point C) {
+    real a = length(B - C); real b = length(C - A); real c = length(A - B);
+    real s = (a + b + c) / 2.0;
+    real area = sqrt(s * (s - a) * (s - b) * (s - c));
+    real r_a = area / (s - a);
+    real cos_A = (b^2 + c^2 - a^2) / (2.0 * b * c);
+    real radius = 2.0 * r_a / (1.0 + cos_A);
+    point Ia = triangle_center(A, B, C, 1001);
+    point center = A + (radius / r_a) * (Ia - A);
+    return circle(center, radius);
+}`,
+            intersect_ggb: `point intersect_ggb(point[] pts, int idx) {
+    if (pts.length == 0) return (nan, nan);
+    for (int i = 0; i < pts.length - 1; ++i) {
+        for (int j = i + 1; j < pts.length; ++j) {
+            if (pts[i].x > pts[j].x || (abs(pts[i].x - pts[j].x) < 1e-9 && pts[i].y > pts[j].y)) {
+                point temp = pts[i]; pts[i] = pts[j]; pts[j] = temp;
+            }
+        }
+    }
+    if (idx >= 1 && idx <= pts.length) return pts[idx-1];
+    return pts[0];
+}
+point intersect_ggb(line l, circle c, int idx) { return intersect_ggb(intersectionpoints(l, c), idx); }
+point intersect_ggb(circle c, line l, int idx) { return intersect_ggb(intersectionpoints(l, c), idx); }
+point intersect_ggb(circle c1, circle c2, int idx) { return intersect_ggb(intersectionpoints(c1, c2), idx); }
+point intersect_ggb(conic c, line l, int idx) { return intersect_ggb(intersectionpoints(c, l), idx); }
+point intersect_ggb(line l, conic c, int idx) { return intersect_ggb(intersectionpoints(l, c), idx); }
+point intersect_ggb(conic c1, conic c2, int idx) { return intersect_ggb(intersectionpoints(c1, c2), idx); }
+point intersect_ggb(conic c, circle ci, int idx) { return intersect_ggb(intersectionpoints(c, ci), idx); }
+point intersect_ggb(circle ci, conic c, int idx) { return intersect_ggb(intersectionpoints(ci, c), idx); }
+point intersect_ggb(arc a, line l, int idx) { return intersect_ggb(intersectionpoints(a, l), idx); }
+point intersect_ggb(line l, arc a, int idx) { return intersect_ggb(intersectionpoints(l, a), idx); }
+point intersect_ggb(arc a, circle c, int idx) { return intersect_ggb(intersectionpoints(a, c), idx); }
+point intersect_ggb(circle c, arc a, int idx) { return intersect_ggb(intersectionpoints(c, a), idx); }
+point intersect_ggb(arc a, conic c, int idx) { return intersect_ggb(intersectionpoints(a, c), idx); }
+point intersect_ggb(conic c, arc a, int idx) { return intersect_ggb(intersectionpoints(c, a), idx); }
+point intersect_ggb(arc a1, arc a2, int idx) { return intersect_ggb(intersectionpoints(a1, a2), idx); }`,
+            relpoint_ggb_line: "point relpoint_ggb_line(line l, point P) { return projection(l) * P; }",
+            relpoint_ggb_circle: "point relpoint_ggb_circle(circle c, point P) { return c.C + c.r * unit(P - c.C); }",
+            relpoint_ggb_path: `point relpoint_ggb_path(path p, point P) {
+    real L = 0; real R = length(p);
+    for (int i=0; i<25; ++i) {
+        real m1 = L + (R - L) / 3; real m2 = R - (R - L) / 3;
+        real d1 = length(relpoint(p, m1) - P); real d2 = length(relpoint(p, m2) - P);
+        if (d1 < d2) R = m2; else L = m1;
+    }
+    return relpoint(p, (L + R) / 2.0);
+}`,
+            auto_align: `pair auto_align(point P, point[] all_pts) {
+    pair force = (0,0);
+    for (point pt : all_pts) {
+        real d = length(P - pt);
+        if (d > 1e-5) {
+            force += (P - pt) / (d * d);
+        }
+    }
+    if (length(force) < 1e-5) return NE;
+    return unit(force);
+}`,
+            polar_ggb: `line polar_ggb(point P, conic co) {
+    bqe eq = equation(co); real x0 = P.x, y0 = P.y;
+    real A = eq.a[0] * x0 + eq.a[1]/2 * y0 + eq.a[3]/2;
+    real B = eq.a[1]/2 * x0 + eq.a[2] * y0 + eq.a[4]/2;
+    real C = eq.a[3]/2 * x0 + eq.a[4]/2 * y0 + eq.a[5];
+    return line(A, B, C);
+}`,
+            arc_ggb: `arc arc_ggb(point A, point B, point C) {
+    circle c = circle(A, B, C);
+    real cross_prod = (B.x - A.x)*(C.y - A.y) - (B.y - A.y)*(C.x - A.x);
+    return arc(c, A, C, cross_prod > 0 ? CCW : CW);
+}`,
+            tangents_ggb: `real [][] tomatrix_ggb(conic c) {
+    real []a = equation(c).a;
+    real [][] m={{a[0], a[1]/2, a[3]/2},{a[1]/2, a[2], a[4]/2},{a[3]/2, a[4]/2, a[5]}};
+    return m;
+}
+real [][] adjmatrix_ggb(real [][] m) {
+    real [][] adj= {{m[1][1]*m[2][2] - m[1][2]*m[2][1], m[0][2]*m[2][1]- m[0][1]*m[2][2], m[0][1]*m[1][2]-m[0][2]*m[1][1]}, {m[1][2]*m[2][0] - m[1][0]*m[2][2], m[0][0]*m[2][2]- m[0][2]*m[2][0], m[0][2]*m[1][0]-m[0][0]*m[1][2]}, {m[1][0]*m[2][1] - m[1][1]*m[2][0], m[0][1]*m[2][0]- m[0][0]*m[2][1], m[0][0]*m[1][1]-m[0][1]*m[1][0]}};
+    return adj;
+}
+real [] tocoefs_ggb(real [][] z) {
+    real [] a = {z[0][0],2*z[0][1],z[1][1],2*z[0][2],2*z[1][2],z[2][2]};
+    return a;
+}
+line [] tangents_ggb(conic cm, conic cn) {
+    line [] tmp; real [][] m = tomatrix_ggb(cm), n = tomatrix_ggb(cn);
+    real [] mc = tocoefs_ggb(adjmatrix_ggb(m)), nc=tocoefs_ggb(adjmatrix_ggb(n));
+    bqe bm = bqe(mc[0],mc[1],mc[2],mc[3],mc[4],mc[5]); bqe bn = bqe(nc[0],nc[1],nc[2],nc[3],nc[4],nc[5]);
+    point []p = intersectionpoints(conic(bm),conic(bn));
+    for (int i=0; i<p.length; ++i) tmp.push(line(p[i].x, p[i].y, 1));
+    return tmp;
+}
+line[] tangents_circle_circle(circle c1, circle c2) {
+    line[] tmp;
+    if (abs(c1.r - c2.r) > 1e-7) {
+        point H_ext = (c1.r * c2.C - c2.r * c1.C) / (c1.r - c2.r);
+        line[] t_ext = tangents(c1, H_ext);
+        for (int i=0; i<t_ext.length; ++i) tmp.push(t_ext[i]);
+    } else {
+        vector v = unit(c2.C - c1.C); vector n = rotate(90)*v;
+        tmp.push(line(c1.C + c1.r * n, c2.C + c2.r * n));
+        tmp.push(line(c1.C - c1.r * n, c2.C - c2.r * n));
+    }
+    point H_int = (c1.r * c2.C + c2.r * c1.C) / (c1.r + c2.r);
+    line[] t_int = tangents(c1, H_int);
+    for (int i=0; i<t_int.length; ++i) tmp.push(t_int[i]);
+    return tmp;
+}`,
+            foot: `point foot(point P, point A, point B) {
+    point Q = reflect(A, B)*P;
+    return (P+Q)/2;
+}`,
+            harmonic_conjugate: `point harmonic_conjugate(point A, point B, point C) {
+    real r = abs(C - A) / abs(C - B); real t = r / (r + 1.0);
+    point D_int = (1.0 - t) * A + t * B;
+    if (abs(C - D_int) < 1e-5) {
+        real t_ext = (r != 1.0) ? r / (r - 1.0) : 1e5;
+        return (1.0 - t_ext) * A + t_ext * B;
+    } else { return D_int; }
+}`,
+            circle_center_to_circle: "circle circle_center_to_circle(point O, circle c) { return circle(O, abs(distance(O, c.C) - c.r)); }",
+            locus_pl: "conic locus_pl(point P, line l) { return conic(P, l); }",
+            locus_pc: "conic locus_pc(point P, circle c) { return conic(P, c.C); }",
+            locus_lc: "conic locus_lc(line l, circle c) { return conic(c.C, l); }",
+            locus_cc: "conic locus_cc(circle c1, circle c2) { return conic(c1.C, c2.C); }"
+        };
+
+        // =============================================================================
+        // CƠ CHẾ BIẾN HÌNH ĐỘNG (TRANSFORMATION ENGINE)
+        // =============================================================================
+        function mapTransform(ins, out, types, transType) {
+            const target = ins[0];
+            const targetType = types[target] ?? 'point';
+            const asyType = targetType === 'ray' ? 'line' : targetType;
+            let transform = '';
+
+            if (transType === 'mirror') {
+                const mirrorObj = ins[1];
+                const mirrorType = types[mirrorObj] ?? 'point';
+                if (mirrorType === 'circle') {
+                    return [['circle', 'line', 'segment', 'ray', 'conic'].includes(targetType)
+                        ? `circle ${out} = inversion(${mirrorObj}) * ${target};`
+                        : `${asyType} ${out} = inversion(${mirrorObj}) * ${target};`, targetType];
+                }
+                transform = ['line', 'segment', 'ray'].includes(mirrorType) ? `reflect(${mirrorObj})` : `scale(-1, ${mirrorObj})`;
+            } else if (transType === 'translate') {
+                transform = `shift(${ins[1]})`;
+            } else if (transType === 'rotate') {
+                const angle = String(ins[1]).includes('°') ? String(ins[1]).replace('°', '') : `(${ins[1]}) * 180 / pi`;
+                transform = ins.length === 3 ? `rotate(${angle}, ${ins[2]})` : `rotate(${angle})`;
+            } else if (transType === 'dilate') {
+                transform = ins.length === 3 ? `scale(${ins[1]}, ${ins[2]})` : `scale(${ins[1]})`;
+            }
+
+            return targetType === 'circle'
+                ? [`circle ${out} = circle(${transform} * ${target}.C, ${transType === 'dilate' ? `abs(${ins[1]}) * ` : ''}${target}.r);`, 'circle']
+                : [`${asyType} ${out} = ${transform} * ${target};`, targetType];
+        }
+
+        // =============================================================================
+        // BỘ ÁNH XẠ COMMAND_MAPPERS NHÓM CHỨC NĂNG
+        // =============================================================================
+        function relpointSuffix(types, key) {
+            const t = types[key];
+            if (t === 'circle') return 'circle';
+            return ['line', 'segment', 'ray', 'axis'].includes(t) ? 'line' : 'path';
+        }
+
+        function mapTriangleCenter(ins, out, types) {
+            const idx = String(ins[3]).trim();
+            if (idx === "1") return [`point ${out} = incenter(${ins[0]}, ${ins[1]}, ${ins[2]});`, 'point'];
+            if (idx === "2") return [`point ${out} = centroid(${ins[0]}, ${ins[1]}, ${ins[2]});`, 'point'];
+            if (idx === "3") return [`point ${out} = circumcenter(${ins[0]}, ${ins[1]}, ${ins[2]});`, 'point'];
+            if (idx === "4") return [`point ${out} = orthocenter(${ins[0]}, ${ins[1]}, ${ins[2]});`, 'point'];
+            return [`point ${out} = triangle_center(${ins[0]}, ${ins[1]}, ${ins[2]}, ${idx});`, 'point'];
+        }
+
+        const COMMAND_MAPPERS = {
+            // 1. POINT COMMANDS
+            point: (ins, out, types) => [`point ${out} = point(${ins[0]});`, 'point'],
+            center: (ins, out, types) => [`point ${out} = ${ins[0]}.C;`, 'point'],
+            midpoint: (ins, out, types) => [
+                ins.length === 2 ? `point ${out} = midpoint(segment(${ins[0]}, ${ins[1]}));`
+                    : (['circle', 'conic', 'ellipse'].includes(types[ins[0]]) ? `point ${out} = ${ins[0]}.C;` : `point ${out} = midpoint(${ins[0]});`),
+                'point'
+            ],
+            intersect: (ins, out, types) => {
+                let is_line_line = ['line', 'segment', 'ray'].includes(types[ins[0]]) && ['line', 'segment', 'ray'].includes(types[ins[1]]);
+                if (is_line_line) {
+                    return [`point ${out} = intersectionpoint(${ins[0]}, ${ins[1]});`, 'point'];
+                } else {
+                    let idx = ins.length >= 3 ? parseInt(ins[2]) : 1;
+                    let cmd = `point ${out} = intersect_ggb(${ins[0]}, ${ins[1]}, ${idx});`;
+                    cmd += `\n// point ${out} = intersectionpoints(${ins[0]}, ${ins[1]})[${idx-1}]; // Native ASY (without GGB sorting)`;
+                    return [cmd, 'point'];
+                }
+            },
+            intersection: (ins, out, types) => {
+                let is_line_line = ['line', 'segment', 'ray'].includes(types[ins[0]]) && ['line', 'segment', 'ray'].includes(types[ins[1]]);
+                if (is_line_line) {
+                    return [`point ${out} = intersectionpoint(${ins[0]}, ${ins[1]});`, 'point'];
+                } else {
+                    let idx = ins.length >= 3 ? parseInt(ins[2]) : 1;
+                    let cmd = `point ${out} = intersect_ggb(${ins[0]}, ${ins[1]}, ${idx});`;
+                    cmd += `\n// point ${out} = intersectionpoints(${ins[0]}, ${ins[1]})[${idx-1}]; // Native ASY (without GGB sorting)`;
+                    return [cmd, 'point'];
+                }
+            },
+            trianglecenter: mapTriangleCenter,
+            closestpoint: (ins, out, types) => [`point ${out} = relpoint_ggb_${relpointSuffix(types, ins[0])}(${ins[0]}, ${ins[1]});`, 'point'],
+
+            // 2. LINE COMMANDS
+            segment: (ins, out, types) => [`segment ${out} = segment(${ins[0]}, ${ins[1]});`, 'segment'],
+            line: (ins, out, types) => [['line', 'segment', 'ray'].includes(types[ins[1]]) ? `line ${out} = parallel(${ins[0]}, ${ins[1]});` : `line ${out} = line(${ins[0]}, ${ins[1]});`, 'line'],
+            ray: (ins, out, types) => [`line ${out} = ray(${ins[0]}, ${ins[1]});`, 'ray'],
+            polyline: (ins, out, types) => [`path ${out} = ${ins.join('--')};`, 'path'],
+            vector: (ins, out, types) => [`path ${out}_path = ${ins[0]} -- ${ins[1]};\npair ${out} = ${ins[1]} - ${ins[0]};`, 'vector'],
+            perpendicularbisector: (ins, out, types) => [`line ${out} = bisector(${ins[0]}, ${ins[1]});`, 'line'],
+            linebisector: (ins, out, types) => [`line ${out} = bisector(${ins[0]}, ${ins[1]});`, 'line'],
+            anglebisector: (ins, out, types) => [ins.length === 3 ? `line ${out} = line(${ins[1]}, ${ins[1]} + unit(${ins[0]} - ${ins[1]}) + unit(${ins[2]} - ${ins[1]}));` : `line ${out} = bisector(${ins[0]}, ${ins[1]});`, 'line'],
+            angularbisector: (ins, out, types) => [ins.length === 3 ? `line ${out} = line(${ins[1]}, ${ins[1]} + unit(${ins[0]} - ${ins[1]}) + unit(${ins[2]} - ${ins[1]}));` : `line ${out} = bisector(${ins[0]}, ${ins[1]});`, 'line'],
+            tangent: (ins, out, types) => [`line ${out} = tangents(${ins[1]}, ${ins[0]})[0];`, 'line'],
+            polar: (ins, out, types) => [`line ${out} = polar_ggb(${ins[0]}, ${ins[1]});`, 'line'],
+            orthogonalline: (ins, out, types) => [`line ${out} = perpendicular(${ins[0]}, ${ins[1]});`, 'line'],
+            perpendicularline: (ins, out, types) => [`line ${out} = perpendicular(${ins[0]}, ${ins[1]});`, 'line'],
+
+            // 3. CIRCLE COMMANDS
+            circle: (ins, out, types) => [
+                ins.length === 3 ? `circle ${out} = circle(${ins[0]}, ${ins[1]}, ${ins[2]});`
+                    : (types[ins[1]] === 'point' ? `circle ${out} = circle_point(${ins[0]}, ${ins[1]});` : `circle ${out} = circle(${ins[0]}, ${ins[1]});`),
+                'circle'
+            ],
+            incircle: (ins, out, types) => [`circle ${out} = incircle(triangle(${ins[0]}, ${ins[1]}, ${ins[2]}));`, 'circle'],
+            circumcircle: (ins, out, types) => [`circle ${out} = circumcircle(triangle(${ins[0]}, ${ins[1]}, ${ins[2]}));`, 'circle'],
+            circulararc: (ins, out, types) => [`arc ${out} = arc(circle(${ins[0]}, abs(${ins[0]} - ${ins[1]})), ${ins[1]}, ${ins[2]});`, 'arc'],
+            circumcirculararc: (ins, out, types) => [`arc ${out} = arc_ggb(${ins[0]}, ${ins[1]}, ${ins[2]});`, 'arc'],
+            circumcirclearc: (ins, out, types) => [`arc ${out} = arc_ggb(${ins[0]}, ${ins[1]}, ${ins[2]});`, 'arc'],
+            circlesector: (ins, out, types) => [`path ${out} = arc(circle(${ins[0]}, abs(${ins[0]} - ${ins[1]})), ${ins[1]}, ${ins[2]}) -- ${ins[0]} -- cycle;`, 'path'],
+            circumcirclesector: (ins, out, types) => [`path ${out} = arc_ggb(${ins[0]}, ${ins[1]}, ${ins[2]}) -- circumcircle(triangle(${ins[0]}, ${ins[1]}, ${ins[2]})).C -- cycle;`, 'path'],
+            semicircle: (ins, out, types) => [`arc ${out} = arc(circle(midpoint(segment(${ins[0]}, ${ins[1]})), abs(${ins[0]} - ${ins[1]})/2.0), ${ins[1]}, ${ins[0]});`, 'arc'],
+
+            // 4. CURVE, POLYGON & LOCUS COMMANDS
+            conic: (ins, out, types) => [`conic ${out} = conic(${ins[0]}, ${ins[1]}, ${ins[2]}, ${ins[3]}, ${ins[4]});`, 'conic'],
+            polygon: (ins, out, types) => [`path ${out} = ${ins.join('--')}--cycle;`, 'polygon'],
+            ellipse: (ins, out, types) => [`ellipse ${out} = ellipse(${ins[0]}, ${ins[1]}, ${ins[2]});`, 'conic'],
+            hyperbola: (ins, out, types) => [`hyperbola ${out} = hyperbola(${ins[0]}, ${ins[1]}, ${ins[2]});`, 'conic'],
+            parabola: (ins, out, types) => [`parabola ${out} = parabola(${ins[0]}, ${ins[1]});`, 'conic'],
+            locuspl: (ins, out, types) => [`conic ${out} = locus_pl(${ins[0]}, ${ins[1]});`, 'conic'],
+            locuspc: (ins, out, types) => [`conic ${out} = locus_pc(${ins[0]}, ${ins[1]});`, 'conic'],
+            locuslc: (ins, out, types) => [`conic ${out} = locus_lc(${ins[0]}, ${ins[1]});`, 'conic'],
+            locuscc: (ins, out, types) => [`conic ${out} = locus_cc(${ins[0]}, ${ins[1]});`, 'conic'],
+
+            // 5. TRANSFORM COMMANDS
+            mirror: (ins, out, types) => mapTransform(ins, out, types, 'mirror'),
+            translate: (ins, out, types) => mapTransform(ins, out, types, 'translate'),
+            rotate: (ins, out, types) => mapTransform(ins, out, types, 'rotate'),
+            dilate: (ins, out, types) => mapTransform(ins, out, types, 'dilate'),
+
+            // 6. MY CUSTOM TOOLS
+            incenter: (ins, out, types) => [`point ${out} = incenter(${ins[0]}, ${ins[1]}, ${ins[2]});`, 'point'],
+            centroid: (ins, out, types) => [`point ${out} = centroid(${ins[0]}, ${ins[1]}, ${ins[2]});`, 'point'],
+            circumcenter: (ins, out, types) => [`point ${out} = circumcenter(${ins[0]}, ${ins[1]}, ${ins[2]});`, 'point'],
+            orthocenter: (ins, out, types) => [`point ${out} = orthocenter(${ins[0]}, ${ins[1]}, ${ins[2]});`, 'point'],
+            excenter: (ins, out, types) => [`point ${out} = excenter(${ins[1]}, ${ins[2]}, ${ins[0]});`, 'point'],
+            excentera: (ins, out, types) => [`point ${out} = excenter(${ins[1]}, ${ins[2]}, ${ins[0]});`, 'point'],
+            excenterb: (ins, out, types) => [`point ${out} = excenter(${ins[2]}, ${ins[0]}, ${ins[1]});`, 'point'],
+            excenterc: (ins, out, types) => [`point ${out} = excenter(${ins[0]}, ${ins[1]}, ${ins[2]});`, 'point'],
+            foot: (ins, out, types) => [`point ${out} = foot(${ins[0]}, ${ins[1]}, ${ins[2]});`, 'point'],
+            harmonicconjugate3p: (ins, out, types) => [`point ${out} = harmonic_conjugate(${ins[0]}, ${ins[1]}, ${ins[2]});`, 'point'],
+            harmonicconjugateratio: (ins, out, types) => [`point ${out} = harmonic_conjugate(${ins[0]}, ${ins[1]}, ${ins[2]});`, 'point'],
+            circlecentertoline: (ins, out, types) => [`circle ${out} = circle(${ins[0]}, distance(${ins[0]}, ${ins[1]}));`, 'circle'],
+            circlecentertocircle: (ins, out, types) => [`circle ${out} = circle_center_to_circle(${ins[0]}, ${ins[1]});`, 'circle'],
+            excircle: (ins, out, types) => [`circle ${out} = excircle(${ins[1]}, ${ins[2]}, ${ins[0]});`, 'circle'],
+            mixtilinearcircle: (ins, out, types) => [`circle ${out} = mixtilinear_incircle(${ins[0]}, ${ins[1]}, ${ins[2]});`, 'circle'],
+            exmixtilinearcircle: (ins, out, types) => [`circle ${out} = exmixtilinear_incircle(${ins[0]}, ${ins[1]}, ${ins[2]});`, 'circle'],
+            radicalline: (ins, out, types) => [`line ${out} = radicalline(${ins[0]}, ${ins[1]});`, 'line'],
+            limitingpoints: (ins, out, types) => [`point ${out} = limiting_point(${ins[0]}, ${ins[1]});`, 'point'],
+            homotheticcenter: (ins, out, types) => [`point ${out} = homothetic_center(${ins[0]}, ${ins[1]});`, 'point'],
+            projecttoline: (ins, out, types) => [`point ${out} = relpoint_ggb_line(${ins[1]}, ${ins[0]});`, "point"]
+        };
+
+        // =============================================================================
+        // CÁC HÀM TIỆN ÍCH TÌM KIẾM XML
+        // =============================================================================
+        function findChild(parent, tagName) {
+            if (!parent) return null;
+            for (let i = 0; i < parent.childNodes.length; i++) {
+                if (parent.childNodes[i].nodeName === tagName) return parent.childNodes[i];
+            }
+            return null;
+        }
+
+        function findAll(parent, tagName) {
+            if (!parent) return [];
+            return Array.from(parent.getElementsByTagName(tagName));
+        }
+
+        // =============================================================================
+        // GgbToAsyConverter - Lớp thực hiện phân tích
+        // =============================================================================
+        class GgbToAsyConverter {
+            constructor(xmlContent) {
+                const parser = new DOMParser();
+                this.doc = parser.parseFromString(xmlContent, 'text/xml');
+                this.types = {};
+                this.nameMap = {};
+                this.typeCounters = {};
+                this.part1FreePoints = [];
+                this.part2DependentGeom = [];
+                this.parsedCommands = [];
+                this.drawGroups = {};
+                this.elementStyles = {};
+                this.labelMap = {};
+                this.coordRatio = 1.0;
+            }
+
+            _ensureDrawGroup(key) {
+                if (!this.drawGroups[key]) this.drawGroups[key] = [];
+            }
+
+            _getNewName(originalLabel, typ) {
+                if (typ === 'point') {
+                    let safeName = originalLabel.replace(/'/g, '_prime').replace(/ /g, '_');
+                    safeName = safeName.replace(/[^a-zA-Z0-9_]/g, '');
+                    this.labelMap[safeName] = originalLabel;
+                    return safeName;
+                }
+
+                const prefixMap = {
+                    line: 'li', segment: 'sg', ray: 'ray',
+                    circle: 'circ', arc: 'arc', conic: 'con', polygon: 'poly',
+                    guide: 'loc', vector: 'v', path: 'pa'
+                };
+                const prefix = prefixMap[typ] ?? 'obj';
+                const idx = this.typeCounters[prefix] ?? 0;
+                this.typeCounters[prefix] = idx + 1;
+                return `${prefix}_${idx}`;
+            }
+
+            _getOutputLabels(cmdNode) {
+                const outputNode = findChild(cmdNode, 'output');
+                if (!outputNode) return [];
+                const labels = [];
+                let i = 0;
+                while (true) {
+                    const a = outputNode.getAttribute(`a${i}`);
+                    if (a === null) break;
+                    labels.push(a);
+                    i++;
+                }
+                return labels;
+            }
+
+            _generateLocusCode(depPt, driverPt, outName) {
+                const dependentVars = new Set([driverPt]);
+                const subgraphCmds = [];
+                const parsedCommands = this.parsedCommands || [];
+
+                for (const pcmd of parsedCommands) {
+                    if (pcmd.ins.some(inp => inp && dependentVars.has(inp))) {
+                        pcmd.out.forEach(out => dependentVars.add(out));
+                        subgraphCmds.push(pcmd.code);
+                    }
+                }
+
+                let driverParent = "unknown_path";
+                for (const pcmd of parsedCommands) {
+                    if (pcmd.out.includes(driverPt) && pcmd.ins.length > 0) {
+                        driverParent = pcmd.ins[0];
+                        break;
+                    }
+                }
+
+                let driverParentType = this.types[driverParent] ?? 'path';
+                if (['ray', 'segment'].includes(driverParentType)) {
+                    driverParentType = 'line';
+                } else if (['polygon', 'vector'].includes(driverParentType)) {
+                    driverParentType = 'path';
+                }
+
+                const lines = [];
+                lines.push(`guide generate_locus_${outName}(${driverParentType} driver_obj, int n=100) {`);
+                lines.push(`    point[] tmp;`);
+                lines.push(`    for (int i=0; i<=n; ++i) {`);
+                lines.push(`        point ${driverPt} = relpoint(driver_obj, (real)i/n);`);
+
+                for (const c of subgraphCmds) {
+                    for (const cl of c.split('\n')) {
+                        lines.push(`        ${cl}`);
+                    }
+                }
+
+                lines.push(`        tmp.push(${depPt});`);
+                lines.push(`    }`);
+                lines.push(`    guide g;`);
+                lines.push(`    if (tmp.length > 0) g = tmp[0];`);
+                lines.push(`    for (int i=1; i<tmp.length; ++i) g = g -- tmp[i];`);
+                lines.push(`    return g;`);
+                lines.push(`}`);
+                lines.push(`guide ${outName} = generate_locus_${outName}(${driverParent});`);
+
+                return lines.join('\n');
+            }
+
+            _mapCommand(cmdName, originalInputs, originalOutputs, pointCoords) {
+                if (!originalOutputs.length || !originalOutputs.some(o => o.trim())) return;
+
+                let origOut = originalOutputs[0];
+                if (!origOut.trim()) {
+                    for (const out of originalOutputs) {
+                        if (out.trim()) { origOut = out; break; }
+                    }
+                }
+
+                for (const inp of originalInputs) {
+                    const mappedInp = this.nameMap[inp] ?? inp;
+                    if (mappedInp && /^[a-zA-Z]/.test(mappedInp) && !(mappedInp in this.types)) {
+                        this.part2DependentGeom.push(
+                            `// Skipped GGB command ${cmdName}(${originalInputs.join(', ')}) -> ${origOut} due to missing dependency: ${inp}`
+                        );
+                        return;
+                    }
+                }
+
+                const lowerCmd = cmdName.toLowerCase();
+
+                // Locus (dynamic path generation)
+                if (lowerCmd === 'locus') {
+                    const depPt = this.nameMap[originalInputs[0]] ?? originalInputs[0];
+                    const driverPt = this.nameMap[originalInputs[1]] ?? originalInputs[1];
+                    const newOut = this._getNewName(origOut, 'guide');
+                    this.nameMap[origOut] = newOut;
+                    this.types[newOut] = 'guide';
+
+                    const locusCode = this._generateLocusCode(depPt, driverPt, newOut);
+                    this.part2DependentGeom.push(locusCode);
+                    return;
+                }
+
+                // Point on object
+                if (lowerCmd === 'point' && origOut in pointCoords) {
+                    const newOut = this._getNewName(origOut, 'point');
+                    this.nameMap[origOut] = newOut;
+                    this.types[newOut] = 'point';
+                    let parent = null;
+
+                    if (originalInputs.length > 0) {
+                        parent = this.nameMap[originalInputs[0]] ?? originalInputs[0];
+                        const parentType = this.types[parent] ?? 'path';
+                        const suffix = parentType === 'circle' ? 'circle'
+                            : ['line', 'segment', 'ray', 'axis'].includes(parentType) ? 'line' : 'path';
+                        const [x, y] = pointCoords[origOut];
+                        let cmd;
+                        if (this.coordRatio !== 1.0) {
+                            const sx = (parseFloat(x) * this.coordRatio).toFixed(5);
+                            const sy = (parseFloat(y) * this.coordRatio).toFixed(5);
+                            cmd = `point ${newOut} = relpoint_ggb_${suffix}(${parent}, (${sx}, ${sy}));`;
+                        } else {
+                            cmd = `point ${newOut} = relpoint_ggb_${suffix}(${parent}, (${x}, ${y}));`;
+                        }
+                        this.part2DependentGeom.push(cmd);
+                        this.parsedCommands.push({ out: [newOut], ins: [parent], code: cmd });
+                    } else {
+                        const [x, y] = pointCoords[origOut];
+                        let cmd;
+                        if (this.coordRatio !== 1.0) {
+                            const sx = (parseFloat(x) * this.coordRatio).toFixed(5);
+                            const sy = (parseFloat(y) * this.coordRatio).toFixed(5);
+                            cmd = `point ${newOut} = (${sx}, ${sy});`;
+                        } else {
+                            cmd = `point ${newOut} = (${x}, ${y});`;
+                        }
+                        this.part2DependentGeom.push(cmd);
+                        this.parsedCommands.push({ out: [newOut], ins: [], code: cmd });
+                    }
+                    return;
+                }
+
+                // AngularBisector
+                if (['angularbisector', 'anglebisector'].includes(lowerCmd) && originalInputs.length === 2) {
+                    const mappedInputs = originalInputs.map(inp => this.nameMap[inp] ?? inp);
+
+                    const out1Orig = originalOutputs[0];
+                    const out1New = this._getNewName(out1Orig, 'line');
+                    this.nameMap[out1Orig] = out1New;
+                    this.types[out1New] = 'line';
+                    const cmd1 = `line ${out1New} = bisector(${mappedInputs[0]}, ${mappedInputs[1]});`;
+                    this.part2DependentGeom.push(cmd1);
+
+                    if (originalOutputs.length > 1) {
+                        const out2Orig = originalOutputs[1];
+                        const out2New = this._getNewName(out2Orig, 'line');
+                        this.nameMap[out2Orig] = out2New;
+                        this.types[out2New] = 'line';
+                        const cmd2 = `line ${out2New} = perpendicular(intersectionpoint(${mappedInputs[0]}, ${mappedInputs[1]}), ${out1New});`;
+                        this.part2DependentGeom.push(cmd2);
+                        this.parsedCommands.push({ out: [out2New], ins: mappedInputs, code: cmd2 });
+                    }
+
+                    this.parsedCommands.push({ out: [out1New], ins: mappedInputs, code: cmd1 });
+                    return;
+                }
+
+                // Tangent
+                if (lowerCmd === 'tangent') {
+                    const mappedInputs = originalInputs.map(inp => this.nameMap[inp] ?? inp);
+                    const type0 = this.types[mappedInputs[0]] ?? 'point';
+                    const type1 = this.types[mappedInputs[1]] ?? 'point';
+                    const conicTypes = ['circle', 'conic', 'ellipse', 'parabola', 'hyperbola'];
+
+                    let tgtFunc;
+                    if (type0 === 'circle' && type1 === 'circle') {
+                        tgtFunc = `tangents_circle_circle(${mappedInputs[0]}, ${mappedInputs[1]})`;
+                    } else if (conicTypes.includes(type0) && conicTypes.includes(type1)) {
+                        tgtFunc = `tangents_ggb(${mappedInputs[0]}, ${mappedInputs[1]})`;
+                    } else if (conicTypes.includes(type0)) {
+                        tgtFunc = `tangents(${mappedInputs[0]}, ${mappedInputs[1]})`;
+                    } else {
+                        tgtFunc = `tangents(${mappedInputs[1]}, ${mappedInputs[0]})`;
+                    }
+
+                    const objIdx = this.typeCounters['obj'] ?? 0;
+                    const tmpName = `tmp_tgts_${objIdx}`;
+                    this.typeCounters['obj'] = objIdx + 1;
+                    const cmdArray = `line[] ${tmpName} = ${tgtFunc};`;
+                    this.part2DependentGeom.push(cmdArray);
+
+                    for (let i = 0; i < originalOutputs.length; i++) {
+                        const outOrig = originalOutputs[i];
+                        const outNew = this._getNewName(outOrig, 'line');
+                        this.nameMap[outOrig] = outNew;
+                        this.types[outNew] = 'line';
+                        const cmdOut = `line ${outNew};\nif (${tmpName}.length > ${i}) ${outNew} = ${tmpName}[{i}];`;
+                        this.part2DependentGeom.push(`line ${outNew};`);
+                        this.part2DependentGeom.push(`if (${tmpName}.length > ${i}) ${outNew} = ${tmpName}[{i}];`);
+                        this.parsedCommands.push({ out: [outNew], ins: mappedInputs, code: cmdOut });
+                    }
+                    this.parsedCommands.push({ out: [tmpName], ins: mappedInputs, code: cmdArray });
+                    return;
+                }
+
+                // Generic command dispatch
+                const mappedInputs = originalInputs.map(inp => this.nameMap[inp] ?? inp);
+
+                if (lowerCmd in COMMAND_MAPPERS) {
+                    const dummyOut = '{OUT}';
+                    const [cmdTemplate, typ] = COMMAND_MAPPERS[lowerCmd](mappedInputs, dummyOut, this.types);
+
+                    const newOut = this._getNewName(origOut, typ);
+                    this.nameMap[origOut] = newOut;
+                    this.types[newOut] = typ;
+
+                    const cmd = cmdTemplate.replace(/{OUT}/g, newOut);
+                    this.part2DependentGeom.push(cmd);
+                    this.parsedCommands.push({ out: [newOut], ins: mappedInputs, code: cmd });
+                } else {
+                    this.part2DependentGeom.push(
+                        `// Unsupported GGB command: ${cmdName}(${originalInputs.join(', ')}) -> ${origOut}`
+                    );
+                }
+            }
+
+            parse() {
+                const construction = findAll(this.doc, 'construction')[0] ?? null;
+                if (!construction) return '';
+
+                // Collect point coordinates & element styles
+                const pointCoords = {};
+                for (const el of findAll(construction, 'element')) {
+                    const label = el.getAttribute('label');
+
+                    const showNode = findChild(el, 'show');
+                    const isVisible = showNode !== null && showNode.getAttribute('object') === 'true';
+                    this.elementStyles[label] = { visible: isVisible };
+
+                    if (el.getAttribute('type') === 'point') {
+                        const coords = findChild(el, 'coords');
+                        if (coords) {
+                            let x = parseFloat(coords.getAttribute('x') ?? '0');
+                            let y = parseFloat(coords.getAttribute('y') ?? '0');
+                            const z = parseFloat(coords.getAttribute('z') ?? '1');
+                            if (Math.abs(z) > 1e-12) { x /= z; y /= z; }
+                            pointCoords[label] = [x, y];
+                        }
+                    }
+                }
+
+                // Identify command outputs
+                const commandOutputs = new Set();
+                for (const cmd of findAll(construction, 'command')) {
+                    for (const label of this._getOutputLabels(cmd)) {
+                        commandOutputs.add(label);
+                    }
+                }
+                for (const expr of findAll(construction, 'expression')) {
+                    const lbl = expr.getAttribute('label');
+                    if (lbl) commandOutputs.add(lbl);
+                }
+
+                // Part 1: Free points
+                for (const child of construction.childNodes) {
+                    if (child.nodeName === 'element') {
+                        const label = child.getAttribute('label');
+                        if (!commandOutputs.has(label)) {
+                            const newLabel = this._getNewName(label, 'point');
+                            this.nameMap[label] = newLabel;
+                            this.types[newLabel] = 'point';
+                        }
+                    }
+                }
+
+                // Coordinate ratio for large-scale drawings
+                let coordRatio = 1.0;
+                const coordValues = Object.values(pointCoords);
+                if (coordValues.length > 0) {
+                    const xs = coordValues.map(v => parseFloat(v[0]));
+                    const ys = coordValues.map(v => parseFloat(v[1]));
+                    const w = xs.length ? Math.max(...xs) - Math.min(...xs) : 0;
+                    const h = ys.length ? Math.max(...ys) - Math.min(...ys) : 0;
+                    const maxDim = Math.max(w, h);
+                    if (maxDim > 20) coordRatio = 10.0 / maxDim;
+                }
+                this.coordRatio = coordRatio;
+
+                // Emit free point declarations
+                for (const [origOut, newOut] of Object.entries(this.nameMap)) {
+                    const typ = this.types[newOut];
+                    if (typ === 'point' && origOut in pointCoords) {
+                        const [x, y] = pointCoords[origOut];
+                        if (coordRatio !== 1.0) {
+                            const sx = (parseFloat(x) * coordRatio).toFixed(5);
+                            const sy = (parseFloat(y) * coordRatio).toFixed(5);
+                            this.part1FreePoints.push(`point ${newOut} = (${sx}, ${sy});`);
+                        } else {
+                            this.part1FreePoints.push(`point ${newOut} = (${x}, ${y});`);
+                        }
+                    }
+                }
+
+                // Part 2: Process commands & expressions
+                for (const child of construction.childNodes) {
+                    if (child.nodeName === 'command') {
+                        const cmdName = child.getAttribute('name');
+                        const inputNode = findChild(child, 'input');
+                        const origInputs = [];
+                        if (inputNode) {
+                            let i = 0;
+                            while (true) {
+                                const a = inputNode.getAttribute(`a${i}`);
+                                if (a === null) break;
+                                origInputs.push(a);
+                                i++;
+                            }
+                        }
+                        const outputs = this._getOutputLabels(child);
+                        this._mapCommand(cmdName, origInputs, outputs, pointCoords);
+                    } else if (child.nodeName === 'expression') {
+                        const label = child.getAttribute('label');
+                        const exp = child.getAttribute('exp');
+                        const typ = child.getAttribute('type') ?? 'point';
+                        if (label && exp) {
+                            const newLabel = this._getNewName(label, typ);
+                            this.nameMap[label] = newLabel;
+                            this.types[newLabel] = typ;
+
+                            // Parse variables in expression
+                            const matches = exp.match(/[a-zA-Z_]\w*/g) || [];
+                            const deps = matches.filter(m => m in this.nameMap);
+
+                            let asyExp = exp;
+                            const uniqueDeps = Array.from(new Set(deps)).sort((a, b) => b.length - a.length);
+                            for (const d of uniqueDeps) {
+                                const regex = new RegExp(`\\b${d}\\b`, 'g');
+                                asyExp = asyExp.replace(regex, this.nameMap[d]);
+                            }
+
+                            const cmd = `${typ} ${newLabel} = ${asyExp};`;
+                            this.part2DependentGeom.push(cmd);
+
+                            const mappedInputs = deps.map(d => this.nameMap[d]);
+                            this.parsedCommands.push({ out: [newLabel], ins: mappedInputs, code: cmd });
+                        }
+                    }
+                }
+
+                // Part 3: Drawing & Styling
+                for (const [origLabel, style] of Object.entries(this.elementStyles)) {
+                    if (style.visible && origLabel in this.nameMap) {
+                        const mappedName = this.nameMap[origLabel];
+                        if (mappedName in this.types) {
+                            const t = this.types[mappedName];
+                            this._ensureDrawGroup(t === 'point' ? 'point' : t);
+                            this.drawGroups[t === 'point' ? 'point' : t].push(mappedName);
+                        }
+                    }
+                }
+
+                const drawSection = ['\n// --- 3. DRAWING & STYLING ---'];
+
+                // Paths first (underneath)
+                for (const [typ, items] of Object.entries(this.drawGroups)) {
+                    if (typ === 'point' || !items.length) continue;
+
+                    if (typ === 'vector') {
+                        const pathExpr = items.map(item => `${item}_path`).join(' ^^ ');
+                        let penVar = `pen_${typ}`;
+                        if (!['line', 'segment', 'ray', 'circle', 'arc', 'conic', 'polygon', 'vector'].includes(typ)) {
+                            penVar = 'black';
+                        }
+                        drawSection.push(`draw(${pathExpr}, ${penVar}, Arrow);`);
+                    } else {
+                        const pathExpr = items.join(' ^^ ');
+                        let penVar = `pen_${typ}`;
+                        if (!['line', 'segment', 'ray', 'circle', 'arc', 'conic', 'polygon', 'guide'].includes(typ)) {
+                            penVar = 'black';
+                        }
+                        drawSection.push(`draw(${pathExpr}, ${penVar});`);
+                    }
+                }
+
+                // Points last (on top)
+                this._ensureDrawGroup('point');
+                const pts = this.drawGroups['point'] ?? [];
+                if (pts.length) {
+                    const ptsArray = pts.join(' ^^ ');
+                    drawSection.push(`dot(${ptsArray}, Fill(white));`);
+                    drawSection.push(`point[] all_pts = new point[]{${pts.join(', ')}};`);
+                    for (const pt of pts) {
+                        const origName = this.labelMap[pt] ?? pt;
+                        drawSection.push(`label("$${origName}$", ${pt}, auto_align(${pt}, all_pts), pen_label);`);
+                    }
+                }
+
+                // Assemble output
+                const unitsize = 1.0;
+                let asyHeaderDynamic = ASY_HEADER.replace('unitsize(1cm);', `unitsize(${unitsize}cm);`);
+
+                // Dynamic styles
+                const dynamicStyles = [];
+                if (pts.length) {
+                    dynamicStyles.push('pen pen_point = black;');
+                    dynamicStyles.push('pen pen_label = black;');
+                }
+                for (const typ of Object.keys(this.drawGroups)) {
+                    if (typ === 'point') continue;
+                    const color = typ === 'conic' ? 'magenta' : (['circle', 'arc'].includes(typ) ? 'deepcyan' : (typ === 'guide' ? 'red' : 'black'));
+                    dynamicStyles.push(`pen pen_${typ} = ${color};`);
+                }
+                asyHeaderDynamic = asyHeaderDynamic.replace('// DYNAMIC_STYLES_HERE', dynamicStyles.join('\n'));
+
+                // Dynamic helpers
+                const allGeneratedCode = [
+                    ...this.part1FreePoints,
+                    ...this.part2DependentGeom,
+                    ...drawSection
+                ].join('\n');
+
+                const activeHelpers = new Set();
+                let changed = true;
+                while (changed) {
+                    changed = false;
+                    for (const [helperName, helperCode] of Object.entries(ASY_HELPERS)) {
+                        if (!activeHelpers.has(helperName)) {
+                            const usedInMain = allGeneratedCode.includes(helperName);
+                            const usedInHelpers = [...activeHelpers].some(h => ASY_HELPERS[h].includes(helperName));
+                            if (usedInMain || usedInHelpers) {
+                                activeHelpers.add(helperName);
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+
+                const helperKeys = Object.keys(ASY_HELPERS).filter(h => activeHelpers.has(h));
+                const dynamicHelpersCode = helperKeys.map(h => ASY_HELPERS[h]).join('\n\n');
+                asyHeaderDynamic = asyHeaderDynamic.replace('// DYNAMIC_HELPERS_HERE', dynamicHelpersCode);
+
+                const result = [
+                    asyHeaderDynamic,
+                    '// --- 1. FREE POINTS ---',
+                    ...this.part1FreePoints,
+                    '\n// --- 2. DEPENDENT GEOMETRY ---',
+                    ...this.part2DependentGeom,
+                    ...drawSection,
+                    `\nshipout(bbox(${unitsize}mm, invisible));`
+                ];
+
+                return result.join('\n');
+            }
+        }
+
+        // =============================================================================
+        // GIAO DIỆN NGƯỜI DÙNG (UI HANDLERS)
+        // =============================================================================
+        function logMessage(msg) {
+            const logEl = document.getElementById('log');
+            logEl.textContent += '\n' + msg;
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        async function processFile(file) {
+            logMessage(`[PROCESS] Đang đọc file: ${file.name}...`);
+            const arrayBuffer = await file.arrayBuffer();
+            
+            try {
+                const zip = await JSZip.loadAsync(arrayBuffer);
+                const xmlFile = zip.file('geogebra.xml');
+                if (!xmlFile) {
+                    throw new Error('Không tìm thấy geogebra.xml trong file .ggb');
+                }
+                
+                logMessage(`[PROCESS] Giải nén geogebra.xml thành công. Đang phân tích...`);
+                const xmlContent = await xmlFile.async('string');
+                
+                const converter = new GgbToAsyConverter(xmlContent);
+                const asyCode = converter.parse();
+                
+                logMessage(`[SUCCESS] Chuyển đổi thành công! Đang tải xuống...`);
+                
+                // Tải xuống file .asy
+                const blob = new Blob([asyCode], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = file.name.replace('.ggb', '.asy');
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                
+            } catch (e) {
+                logMessage(`[ERROR] Lỗi khi xử lý ${file.name}: ${e.message}`);
+                console.error(e);
+            }
+        }
+
+        // Drag & Drop
+        const dropZone = document.querySelector('.upload-box');
+        const fileInput = document.getElementById('file-input');
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.style.backgroundColor = '#e6f7ff';
+        });
+        dropZone.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            dropZone.style.backgroundColor = '#f9fbfd';
+        });
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.style.backgroundColor = '#f9fbfd';
+            if (e.dataTransfer.files.length > 0) {
+                Array.from(e.dataTransfer.files).forEach(f => {
+                    if (f.name.endsWith('.ggb')) processFile(f);
+                });
+            }
+        });
+
+        // Input Click
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                Array.from(e.target.files).forEach(f => {
+                    if (f.name.endsWith('.ggb')) processFile(f);
+                });
+            }
+            fileInput.value = '';
+        });
+    </script>
+</body>
+</html>
